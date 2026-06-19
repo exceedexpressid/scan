@@ -6,98 +6,127 @@
     <title>Live Scanner App</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Roboto', sans-serif;
-        }
-        body {
-            background-color: #000;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        /* Container untuk kamera */
-        #camera-view {
-            flex-grow: 1;
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background-color: #111;
-            overflow: hidden;
-        }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover; /* Menyesuaikan layar tanpa merusak rasio */
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Roboto', sans-serif; }
+        body { background-color: #000; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        #camera-view { flex-grow: 1; position: relative; display: flex; justify-content: center; align-items: center; background-color: #111; overflow: hidden; }
         
-        /* Kotak Panduan Scan (Scanner Guide) */
+        /* Object-fit diubah agar kompatibel dengan lebih banyak HP */
+        video { width: 100%; height: 100%; object-fit: cover; } 
+        
         #scan-guide {
-            position: absolute;
-            width: 85%;
-            height: 250px;
-            border: 2px solid #007BFF;
-            border-radius: 16px;
-            /* Membuat area di luar kotak menjadi gelap */
-            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.6);
-            z-index: 5;
-            pointer-events: none;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
+            position: absolute; width: 85%; height: 250px; border: 2px solid #007BFF; border-radius: 16px;
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.6); z-index: 5; pointer-events: none;
+            display: flex; justify-content: center; align-items: flex-start;
         }
-        #scan-guide::before {
-            content: "Arahkan tulisan ke dalam kotak ini";
-            color: #fff;
-            background: rgba(0,0,0,0.5);
-            padding: 5px 15px;
-            border-radius: 0 0 10px 10px;
-            font-size: 14px;
+        #scan-guide::before { content: "Arahkan tulisan ke dalam kotak ini"; color: #fff; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 0 0 10px 10px; font-size: 14px; }
+        #controls { height: 120px; background-color: #000; display: flex; justify-content: center; align-items: center; position: relative; padding-bottom: 20px; z-index: 10; }
+        #capture-btn { width: 70px; height: 70px; border-radius: 50%; background-color: transparent; border: 4px solid #fff; position: relative; cursor: pointer; outline: none; display: flex; justify-content: center; align-items: center; }
+        #capture-btn::after { content: ''; width: 54px; height: 54px; background-color: #fff; border-radius: 50%; transition: all 0.2s; }
+        #capture-btn:active::after { background-color: #ccc; transform: scale(0.9); }
+        #loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); color: #fff; display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 15; }
+        .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-top: 4px solid #fff; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #result-panel { position: absolute; bottom: -100%; left: 0; width: 100%; height: 70vh; background-color: #fff; border-radius: 24px 24px 0 0; padding: 20px; transition: bottom 0.3s ease-in-out; z-index: 20; box-shadow: 0 -4px 10px rgba(0,0,0,0.2); display: flex; flex-direction: column; }
+        #result-panel.active { bottom: 0; }
+        #result-panel h3 { margin-bottom: 15px; color: #333; text-align: center; }
+        #result-text { flex-grow: 1; overflow-y: auto; background-color: #f4f4f4; padding: 15px; border-radius: 12px; white-space: pre-wrap; color: #222; font-size: 16px; line-height: 1.5; border: 1px solid #ddd; }
+        #close-btn { margin-top: 15px; padding: 15px; background-color: #007BFF; color: white; text-align: center; border-radius: 30px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        
+        /* Tambahan pesan error jika kamera ditolak */
+        #error-msg { position: absolute; color: white; text-align: center; padding: 20px; display: none; z-index: 2; }
+    </style>
+</head>
+<body>
+
+    <div id="camera-view">
+        <video id="video" autoplay playsinline muted></video>
+        <div id="scan-guide"></div>
+        <div id="error-msg">Gagal membuka kamera. Pastikan izin kamera sudah diaktifkan di browser.</div>
+        <div id="loading-overlay">
+            <div class="spinner"></div>
+            <p>Memproses teks, tahan sebentar...</p>
+        </div>
+    </div>
+
+    <div id="controls"><div id="capture-btn"></div></div>
+    <canvas id="canvas" style="display: none;"></canvas>
+
+    <div id="result-panel">
+        <h3>Hasil Scan</h3>
+        <div id="result-text"></div>
+        <div id="close-btn">Scan Lagi</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const captureBtn = document.getElementById('capture-btn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const resultPanel = document.getElementById('result-panel');
+        const resultText = document.getElementById('result-text');
+        const closeBtn = document.getElementById('close-btn');
+        const errorMsg = document.getElementById('error-msg');
+
+        // Fungsi kamera dengan sistem Fallback (cadangan)
+        async function startCamera() {
+            try {
+                // Coba 1: Minta kamera belakang
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" } 
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                console.warn("Kamera belakang spesifik gagal, mencoba kamera default...", err);
+                try {
+                    // Coba 2: Minta kamera apa saja yang tersedia (jika coba 1 gagal)
+                    const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = fallbackStream;
+                } catch (fallbackErr) {
+                    // Jika tetap gagal, tampilkan pesan error di layar
+                    console.error("Akses kamera ditolak atau tidak tersedia.", fallbackErr);
+                    errorMsg.style.display = "block";
+                }
+            }
         }
 
-        /* Area kontrol di bagian bawah */
-        #controls {
-            height: 120px;
-            background-color: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            position: relative;
-            padding-bottom: 20px;
-            z-index: 10;
-        }
-        /* Tombol Jepret */
-        #capture-btn {
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
-            background-color: transparent;
-            border: 4px solid #fff;
-            position: relative;
-            cursor: pointer;
-            outline: none;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        #capture-btn::after {
-            content: '';
-            width: 54px;
-            height: 54px;
-            background-color: #fff;
-            border-radius: 50%;
-            transition: all 0.2s;
-        }
-        #capture-btn:active::after {
-            background-color: #ccc;
-            transform: scale(0.9);
-        }
-        
-        /* Overlay Loading */
-        #loading-overlay {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
+        startCamera();
+
+        captureBtn.addEventListener('click', () => {
+            // Pastikan video sudah berjalan sebelum menjepret
+            if (video.videoWidth === 0) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            const imageData = canvas.toDataURL('image/jpeg', 0.9);
+            loadingOverlay.style.display = 'flex';
+
+            Tesseract.recognize(
+                imageData,
+                'ind+eng',
+                { logger: m => console.log(m) }
+            ).then(({ data: { text } }) => {
+                loadingOverlay.style.display = 'none';
+                const cleanedText = text.trim();
+                
+                if(cleanedText === "") {
+                    resultText.innerText = "Tidak ada teks yang terdeteksi.";
+                } else {
+                    resultText.innerText = cleanedText;
+                }
+                resultPanel.classList.add('active');
+            }).catch(err => {
+                loadingOverlay.style.display = 'none';
+                alert("Gagal memproses gambar.");
+            });
+        });
+
+        closeBtn.addEventListener('click', () => {
+            resultPanel.classList.remove('active');
+            resultText.innerText = "";
+        });
+    </script>
+</body>
+</html>
